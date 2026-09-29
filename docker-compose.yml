@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppassword
+      POSTGRES_DB: integrationdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - integration_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d integrationdb"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://appuser:apppassword@db:5432/integrationdb
+      SYNC_DATABASE_URL: postgresql+psycopg://appuser:apppassword@db:5432/integrationdb
+      REDIS_URL: redis://redis:6379/0
+      WEBHOOK_SECRET: development-secret
+    ports:
+      - "8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A app.worker.celery_app.celery_app worker --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+asyncpg://appuser:apppassword@db:5432/integrationdb
+      SYNC_DATABASE_URL: postgresql+psycopg://appuser:apppassword@db:5432/integrationdb
+      REDIS_URL: redis://redis:6379/0
+      WEBHOOK_SECRET: development-secret
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  integration_db_data:
